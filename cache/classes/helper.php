@@ -439,7 +439,7 @@ class cache_helper {
             $storeclass = get_class($store);
             $store = $store->my_name();
         }
-        list($definitionstr, $mode) = self::get_definition_stat_id_and_mode($definition);
+        [$definitionstr, $mode] = self::get_definition_stat_id_and_mode($definition);
         self::ensure_ready_for_stats($store, $storeclass, $definitionstr, $mode);
         self::$stats[$definitionstr]['stores'][$store]['hits'] += $hits;
         if ($readbytes !== cache_store::IO_BYTES_NOT_SUPPORTED) {
@@ -471,7 +471,7 @@ class cache_helper {
             $storeclass = get_class($store);
             $store = $store->my_name();
         }
-        list($definitionstr, $mode) = self::get_definition_stat_id_and_mode($definition);
+        [$definitionstr, $mode] = self::get_definition_stat_id_and_mode($definition);
         self::ensure_ready_for_stats($store, $storeclass, $definitionstr, $mode);
         self::$stats[$definitionstr]['stores'][$store]['misses'] += $misses;
     }
@@ -498,7 +498,7 @@ class cache_helper {
             $storeclass = get_class($store);
             $store = $store->my_name();
         }
-        list($definitionstr, $mode) = self::get_definition_stat_id_and_mode($definition);
+        [$definitionstr, $mode] = self::get_definition_stat_id_and_mode($definition);
         self::ensure_ready_for_stats($store, $storeclass, $definitionstr, $mode);
         self::$stats[$definitionstr]['stores'][$store]['sets'] += $sets;
         if ($writebytes !== cache_store::IO_BYTES_NOT_SUPPORTED) {
@@ -756,25 +756,39 @@ class cache_helper {
                     debugging('Cache stores used for session definitions should ideally be searchable.', DEBUG_DEVELOPER);
                     continue;
                 }
-                // Get all of the keys.
-                $keys = $store->find_by_prefix(cache_session::KEY_PREFIX);
-                $todelete = array();
+
+                // Get all of the last access keys.
+                if (!$keys = $store->find_by_prefix(cache_session::LASTACCESS)) {
+                    continue;
+                }
+
+                $todelete = [];
+
                 foreach ($store->get_many($keys) as $key => $value) {
-                    if (strpos($key, cache_session::KEY_PREFIX) !== 0 || !is_array($value) || !isset($value['lastaccess'])) {
-                        continue;
-                    }
-                    if ((int)$value['lastaccess'] < $purgetime || true) {
-                        $todelete[] = $key;
-                    }
-                }
-                if (count($todelete)) {
-                    $outcome = (int)$store->delete_many($todelete);
-                    if ($output) {
-                        $strdef = s($definition->get_id());
-                        $strstore = s($store->my_name());
-                        mtrace("- Removed {$outcome} old {$strdef} sessions from the '{$strstore}' cache store.");
+                    if (
+                        ($value instanceof cache_ttl_wrapper && $value->has_expired()) ||
+                        (is_int($value) && $value < $purgetime)
+                    ) {
+                        // We need to delete the key itself, and any other keys that have this key's name as a prefix.
+                        $todelete[] = [$key];
+                        $todelete[] = $store->find_by_prefix(substr($key, strlen(cache_session::LASTACCESS)));
                     }
                 }
+
+                if (!$todelete) {
+                    continue;
+                }
+
+                $outcome = (int) $store->delete_many(array_merge(...$todelete));
+
+                if ($output) {
+                    $strdef = s($definition->get_id());
+                    $strstore = s($store->my_name());
+                    mtrace("- Removed {$outcome} old {$strdef} sessions from the '{$strstore}' cache store.");
+                }
+
+                // Don't block other processes from using the cache server.
+                sleep(1);
             }
         }
     }
