@@ -2018,11 +2018,6 @@ class cache_session extends cache {
     protected $session = null;
 
     /**
-     * Constant used to prefix keys.
-     */
-    const KEY_PREFIX = 'sess_';
-
-    /**
      * This is the key used to track last access.
      */
     const LASTACCESS = '__lastaccess__';
